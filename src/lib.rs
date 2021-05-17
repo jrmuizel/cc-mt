@@ -31,7 +31,7 @@
 //! and have the `Owner` remain allocated as long as any `Gadget` points at it.
 //!
 //! ```rust
-//! use bacon_rajan_cc::{Cc, Trace, Tracer, collect_cycles};
+//! use cc_mt::{Cc, Trace, Tracer, collect_cycles};
 //!
 //! struct Owner {
 //!     name: String
@@ -98,7 +98,7 @@
 //! documentation for more details on interior mutability.
 //!
 //! ```rust
-//! use bacon_rajan_cc::{Cc, Weak, Trace, Tracer, collect_cycles};
+//! use cc_mt::{Cc, Weak, Trace, Tracer, collect_cycles};
 //! use std::cell::RefCell;
 //!
 //! struct Owner {
@@ -167,6 +167,8 @@
 #![deny(missing_docs)]
 
 extern crate core;
+extern crate parking_lot;
+extern crate once_cell;
 use core::cell::Cell;
 use core::clone::Clone;
 use core::cmp::{PartialEq, PartialOrd, Eq, Ord, Ordering};
@@ -181,6 +183,7 @@ use core::option::Option::{Some, None};
 use core::ptr;
 use core::result::Result;
 use core::result::Result::{Ok, Err};
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 
 use std::alloc::{dealloc, Layout};
 
@@ -231,7 +234,7 @@ pub struct CcBoxData {
 #[derive(Debug)]
 struct CcBox<T: Trace> {
     value: T,
-    data: CcBoxData,
+    data: ReentrantMutex<CcBoxData>,
 }
 
 /// A reference-counted pointer type over an immutable value.
@@ -249,7 +252,7 @@ impl<T: Trace> Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     /// ```
@@ -262,12 +265,12 @@ impl<T: Trace> Cc<T> {
                 // if the weak pointer is stored inside the strong one.
                 _ptr: NonNull::new_unchecked(Box::into_raw(Box::new(CcBox {
                     value: value,
-                    data: CcBoxData {
+                    data: ReentrantMutex::new(CcBoxData {
                         strong: Cell::new(1),
                         weak: Cell::new(1),
                         buffered: Cell::new(false),
                         color: Cell::new(Color::Black),
-                    }
+                    })
                 }))),
             }
         }
@@ -278,7 +281,7 @@ impl<T: Trace> Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -332,8 +335,8 @@ impl<T: 'static + Trace> Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc;
-    /// use bacon_rajan_cc::{Cc, collect_cycles};
+    /// use cc_mt;
+    /// use cc_mt::{Cc, collect_cycles};
     /// {
     ///   let five = Cc::new(5);
     ///   assert_eq!(five.is_unique(), true);
@@ -356,7 +359,7 @@ impl<T: 'static + Trace> Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::{Cc, collect_cycles};
+    /// use cc_mt::{Cc, collect_cycles};
     /// {
     ///   let x = Cc::new(3);
     ///   assert_eq!(x.try_unwrap(), Ok(3));
@@ -392,7 +395,7 @@ impl<T: 'static + Trace> Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::{Cc, collect_cycles};
+    /// use cc_mt::{Cc, collect_cycles};
     /// {
     ///   let mut x = Cc::new(3);
     ///   *Cc::get_mut(&mut x).unwrap() = 4;
@@ -431,7 +434,7 @@ impl<T: 'static + Clone + Trace> Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let mut five = Cc::new(5);
     ///
@@ -477,7 +480,7 @@ impl<T: Trace> Drop for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// {
     ///     let five = Cc::new(5);
@@ -495,11 +498,14 @@ impl<T: Trace> Drop for Cc<T> {
     /// ```
     fn drop(&mut self) {
         unsafe {
-            if self.strong() > 0 {
-                self.dec_strong();
-                if self.strong() == 0 {
+            let data = self.data();
+            if data.strong.get() > 0 {
+                data.strong.set(data.strong.get() - 1);
+                if data.strong.get() == 0 {
+                    drop(data);
                     self.release();
                 } else {
+                    drop(data);
                     self.possible_root();
                 }
             }
@@ -517,7 +523,7 @@ impl<T: Trace> Clone for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::{Cc, collect_cycles};
+    /// use cc_mt::{Cc, collect_cycles};
     ///
     /// let five = Cc::new(5);
     ///
@@ -531,13 +537,13 @@ impl<T: Trace> Clone for Cc<T> {
     }
 }
 
-impl<T: Default + Trace> Default for Cc<T> {
+impl<T: Default + Trace > Default for Cc<T> {
     /// Creates a new `Cc<T>`, with the `Default` value for `T`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let x: Cc<i32> = Default::default();
     /// ```
@@ -547,7 +553,7 @@ impl<T: Default + Trace> Default for Cc<T> {
     }
 }
 
-impl<T: PartialEq + Trace> PartialEq for Cc<T> {
+impl<T: PartialEq + Trace > PartialEq for Cc<T> {
     /// Equality for two `Cc<T>`s.
     ///
     /// Two `Cc<T>`s are equal if their inner value are equal.
@@ -555,7 +561,7 @@ impl<T: PartialEq + Trace> PartialEq for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -571,7 +577,7 @@ impl<T: PartialEq + Trace> PartialEq for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -591,7 +597,7 @@ impl<T: PartialOrd + Trace> PartialOrd for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -609,7 +615,7 @@ impl<T: PartialOrd + Trace> PartialOrd for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -625,7 +631,7 @@ impl<T: PartialOrd + Trace> PartialOrd for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -641,7 +647,7 @@ impl<T: PartialOrd + Trace> PartialOrd for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -657,7 +663,7 @@ impl<T: PartialOrd + Trace> PartialOrd for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -675,7 +681,7 @@ impl<T: Ord + Trace> Ord for Cc<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let five = Cc::new(5);
     ///
@@ -734,7 +740,7 @@ impl<T: Trace> Weak<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::{Cc, collect_cycles};
+    /// use cc_mt::{Cc, collect_cycles};
     ///
     /// let five = Cc::new(5);
     ///
@@ -762,7 +768,7 @@ impl<T: Trace> Drop for Weak<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// {
     ///     let five = Cc::new(5);
@@ -782,11 +788,13 @@ impl<T: Trace> Drop for Weak<T> {
     /// ```
     fn drop(&mut self) {
         unsafe {
-            if self.weak() > 0 {
-                self.dec_weak();
+            let data = self.data();
+            if data.weak.get() > 0 {
+                data.weak.set(data.weak.get() - 1);
                 // The weak count starts at 1, and will only go to zero if all
                 // the strong pointers have disappeared.
-                if self.weak() == 0 {
+                if data.weak.get() == 0 {
+                    drop(data);
                     dealloc(self._ptr.cast().as_ptr(), Layout::new::<CcBox<T>>())
                 }
             }
@@ -803,7 +811,7 @@ impl<T: Trace> Clone for Weak<T> {
     /// # Examples
     ///
     /// ```
-    /// use bacon_rajan_cc::Cc;
+    /// use cc_mt::Cc;
     ///
     /// let weak_five = Cc::new(5).downgrade();
     ///
@@ -842,24 +850,34 @@ impl<T: Trace> Trace for CcBox<T> {
     }
 }
 
+unsafe impl<T: Trace> Send for Cc<T> {}
+
 #[doc(hidden)]
 impl<T: Trace> CcBoxPtr for Cc<T> {
     #[inline(always)]
-    fn data(&self) -> &CcBoxData {
+    fn data(&self) -> ReentrantMutexGuard<CcBoxData> {
         unsafe {
             // Safe to assume this here, as if it weren't true, we'd be breaking
             // the contract anyway.
             // This allows the null check to be elided in the destructor if we
             // manipulated the reference count in the same function.
-            &self._ptr.as_ref().data
+            self._ptr.as_ref().data.lock()
+        }
+    }
+    fn force_unlock(&self) {
+        unsafe {
+            self._ptr.as_ref().data.force_unlock();
         }
     }
 
 }
 
+unsafe impl<T: Trace> Send for Weak<T> {}
+
+
 impl<T: Trace> CcBoxPtr for Weak<T> {
     #[inline(always)]
-    fn data(&self) -> &CcBoxData {
+    fn data(&self) -> ReentrantMutexGuard<CcBoxData> {
         unsafe {
             // Safe to assume this here, as if it weren't true, we'd be breaking
             // the contract anyway.
@@ -871,18 +889,30 @@ impl<T: Trace> CcBoxPtr for Weak<T> {
             // reference to it on the stack because we can end up being called
             // from the drop method of strong Cc<T> to the same data.
             // The standard library does the same sort of thing using `WeakInner`
-            &(*self._ptr.as_ptr()).data
+            &(*self._ptr.as_ptr()).data.lock()
+        }
+    }
+    fn force_unlock(&self) {
+        unsafe {
+            self._ptr.as_ref().data.force_unlock();
         }
     }
 
 }
 
+unsafe impl<T: Trace> Send for CcBox<T> {}
+
+
 // We also implement CcBoxPtr on CcBox so we can add and operate on type erased CcBox's
 // added to the ROOTS table
 impl<T: Trace> CcBoxPtr for CcBox<T> {
     #[inline(always)]
-    fn data(&self) -> &CcBoxData { &self.data }
-
+    fn data(&self) -> ReentrantMutexGuard<CcBoxData> { self.data.lock() }
+    fn force_unlock(&self) {
+        unsafe {
+            self.data.force_unlock();
+        }
+    }
 }
 
 unsafe fn deallocate(ptr: NonNull<dyn CcBoxPtr>) {

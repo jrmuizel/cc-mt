@@ -9,9 +9,15 @@
 
 use std::ptr::NonNull;
 use std::cell::RefCell;
+use once_cell::sync::Lazy;
 
 use cc_box_ptr::{CcBoxPtr, free};
+use parking_lot::Mutex;
 use super::Color;
+
+struct CcPtr(NonNull<dyn CcBoxPtr>);
+unsafe impl Sync for CcPtr {}
+unsafe impl Send for CcPtr {}
 
 thread_local!(static ROOTS: RefCell<Vec<NonNull<dyn CcBoxPtr>>> = RefCell::new(vec![]));
 
@@ -36,7 +42,7 @@ pub fn add_root(box_ptr: NonNull<dyn CcBoxPtr>) {
 /// number of possible roots buffered.
 ///
 /// ```rust
-/// use bacon_rajan_cc::{Cc, Trace, Tracer, number_of_roots_buffered};
+/// use cc_mt::{Cc, Trace, Tracer, number_of_roots_buffered};
 /// use std::cell::RefCell;
 ///
 /// struct Gadget {
@@ -113,7 +119,7 @@ pub fn number_of_roots_buffered() -> usize {
 /// emptied and members of dead cycles (White nodes) are dropped.
 ///
 /// ```rust
-/// use bacon_rajan_cc::{Cc, Trace, Tracer, collect_cycles};
+/// use cc_mt::{Cc, Trace, Tracer, collect_cycles};
 /// use std::cell::RefCell;
 ///
 /// // The number of Gadgets allocated at any given time.
@@ -198,8 +204,9 @@ fn mark_roots() {
         if cc_box_ptr.color() == Color::Gray {
             return;
         }
-
+        
         cc_box_ptr.data().color.set(Color::Gray);
+        std::mem::forget(cc_box_ptr.data());
 
         cc_box_ptr.trace(&mut |t| {
             t.dec_strong();
@@ -216,13 +223,15 @@ fn mark_roots() {
     let mut new_roots : Vec<_> = old_roots.into_iter().filter_map(|s| {
         let keep = unsafe {
             let box_ptr : &dyn CcBoxPtr = s.as_ref();
-            if box_ptr.color() == Color::Purple {
+            let data = box_ptr.data();
+            if data.color.get() == Color::Purple {
                 mark_gray(box_ptr);
                 true
             } else {
-                box_ptr.data().buffered.set(false);
+                data.buffered.set(false);
 
-                if box_ptr.color() == Color::Black && box_ptr.strong() == 0 {
+                if data.color.get() == Color::Black && box_ptr.strong() == 0 {
+                    drop(data);
                     free(s);
                 }
 
@@ -271,6 +280,7 @@ fn scan_roots() {
             });
         }
     }
+
 
     ROOTS.with(|r| {
         let mut v = r.borrow_mut();
@@ -327,6 +337,7 @@ fn collect_roots() {
                 t.data().strong.set(t.strong() + 1)
             }
         });
+        unsafe { ptr.force_unlock() }
         unsafe { crate::drop_value(*i); }
         unsafe { free(*i); }
     }

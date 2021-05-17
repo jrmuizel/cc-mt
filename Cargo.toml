@@ -1,5 +1,5 @@
 [package]
-name = "bacon_rajan_cc"
+name = "cc_mt"
 version = "0.3.2"
 authors = ["Nick Fitzgerald <fitzgen@gmail.com>", "Jeff Muizelaar <jrmuizel@gmail.com>"]
 
@@ -15,6 +15,8 @@ readme="README.md"
 keywords=["cc", "gc", "mark", "sweep", "garbage"]
 
 [lib]
-name = "bacon_rajan_cc"
+name = "cc_mt"
 
 [dependencies]
+parking_lot = "0.11.1"
+once_cell = "1.7.2"

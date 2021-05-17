@@ -10,12 +10,14 @@
 use super::{CcBoxData, Color};
 use trace::Trace;
 use std::ptr::NonNull;
+use parking_lot::ReentrantMutexGuard;
 
 /// A trait to group all of the operations we need to be able to do on
 /// `CcBox<T>`'s, potentially across different T types.
 pub trait CcBoxPtr: Trace {
     /// Get this `CcBoxPtr`'s CcBoxData.
-    fn data(&self) -> &CcBoxData;
+    fn data(&self) -> ReentrantMutexGuard<CcBoxData>;
+    fn force_unlock(&self);
 
     /// Get the color of this node.
     #[inline]
@@ -33,8 +35,9 @@ pub trait CcBoxPtr: Trace {
     /// Increment this node's strong reference count.
     #[inline]
     fn inc_strong(&self) {
-        self.data().strong.set(self.strong() + 1);
-        self.data().color.set(Color::Black);
+        let guard = self.data();
+        guard.strong.set(self.strong() + 1);
+        guard.color.set(Color::Black);
     }
 
     /// Decrement this node's strong reference count.
