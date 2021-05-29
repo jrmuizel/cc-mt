@@ -895,7 +895,7 @@ impl<T: Trace> CcBoxPtr for Weak<T> {
             // reference to it on the stack because we can end up being called
             // from the drop method of strong Cc<T> to the same data.
             // The standard library does the same sort of thing using `WeakInner`
-            &(*self._ptr.as_ptr()).data.lock()
+            (*self._ptr.as_ptr()).data.lock()
         }
     }
     fn force_unlock(&self) {

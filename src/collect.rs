@@ -90,7 +90,7 @@ pub fn add_root(box_ptr: NonNull<dyn CcBoxPtr>) {
 ///                1 /* parent */ + 10 /* children */);
 ///
 ///     // reclaim the cycle
-///     bacon_rajan_cc::collect_cycles();
+///     cc_mt::collect_cycles();
 ///     assert_eq!(number_of_roots_buffered(), 0);
 /// }
 /// ```
@@ -265,6 +265,7 @@ fn scan_roots() {
                 scan_black(t);
             }
         });
+        assert!(s.is_locked());
         unsafe { s.force_unlock() }
     }
 
