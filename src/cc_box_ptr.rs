@@ -18,6 +18,7 @@ pub trait CcBoxPtr: Trace {
     /// Get this `CcBoxPtr`'s CcBoxData.
     fn data(&self) -> ReentrantMutexGuard<CcBoxData>;
     fn force_unlock(&self);
+    fn is_locked(&self) -> bool;
 
     /// Get the color of this node.
     #[inline]

@@ -206,6 +206,7 @@ fn mark_roots() {
         }
         
         cc_box_ptr.data().color.set(Color::Gray);
+        // grab and hold the mutex
         std::mem::forget(cc_box_ptr.data());
 
         cc_box_ptr.trace(&mut |t| {
@@ -264,6 +265,7 @@ fn scan_roots() {
                 scan_black(t);
             }
         });
+        unsafe { s.force_unlock() }
     }
 
     fn scan(s: &dyn CcBoxPtr) {
@@ -305,12 +307,15 @@ fn collect_roots() {
 
     fn collect_white(s: &(dyn CcBoxPtr + 'static), white: &mut Vec<NonNull<dyn CcBoxPtr>>) {
         if s.color() == Color::White && !s.buffered() {
+            assert!(s.is_locked());
             s.data().color.set(Color::Black);
             s.trace(&mut |t| {
                 collect_white(t, white);
             });
             s.inc_weak();
+            assert!(s.is_locked());
             white.push(s.into());
+        } else {
         }
     }
 

@@ -246,6 +246,8 @@ pub struct Cc<T: 'static + Trace> {
     _ptr: NonNull<CcBox<T>>,
 }
 
+
+
 impl<T: Trace> Cc<T> {
     /// Constructs a new `Cc<T>`.
     ///
@@ -850,7 +852,8 @@ impl<T: Trace> Trace for CcBox<T> {
     }
 }
 
-unsafe impl<T: Trace> Send for Cc<T> {}
+unsafe impl<T: Trace + Send> Send for Cc<T> {}
+unsafe impl<T: Trace + Sync> Sync for Cc<T> {}
 
 #[doc(hidden)]
 impl<T: Trace> CcBoxPtr for Cc<T> {
@@ -869,6 +872,9 @@ impl<T: Trace> CcBoxPtr for Cc<T> {
             self._ptr.as_ref().data.force_unlock();
         }
     }
+    fn is_locked(&self) -> bool {
+        unsafe {
+            self._ptr.as_ref().data.is_locked()}    }
 
 }
 
@@ -897,10 +903,14 @@ impl<T: Trace> CcBoxPtr for Weak<T> {
             self._ptr.as_ref().data.force_unlock();
         }
     }
+    fn is_locked(&self) -> bool {
+        unsafe {
+        self._ptr.as_ref().data.is_locked()}
+    }
 
 }
 
-unsafe impl<T: Trace> Send for CcBox<T> {}
+unsafe impl<T: Trace + Send> Send for CcBox<T> {}
 
 
 // We also implement CcBoxPtr on CcBox so we can add and operate on type erased CcBox's
@@ -912,6 +922,9 @@ impl<T: Trace> CcBoxPtr for CcBox<T> {
         unsafe {
             self.data.force_unlock();
         }
+    }
+    fn is_locked(&self) -> bool {
+        self.data.is_locked()
     }
 }
 
@@ -1266,7 +1279,7 @@ mod tests {
         let count = std::rc::Rc::new(std::cell::Cell::new(0));
         struct A {
             count: std::rc::Rc<std::cell::Cell<i32>>,
-            next_op: Cc<RefCell<Option<A>>>
+            next_op: Cc<parking_lot::ReentrantMutex<RefCell<Option<A>>>>
         }
         impl Clone for A {
             fn clone(&self) -> Self {
@@ -1287,7 +1300,7 @@ mod tests {
                 count.set(count.get() + 1);
                 A {
                     count,
-                    next_op: Cc::new(RefCell::new(next_op))
+                    next_op: Cc::new(parking_lot::ReentrantMutex::new(RefCell::new(next_op)))
                 }
             }
         }
@@ -1302,11 +1315,11 @@ mod tests {
                 let z = A::new(count.clone(), None);
                 let y = A::new(count.clone(), Some(z.clone()));
                 let x = A::new(count.clone(), Some(y));
-                *z.next_op.borrow_mut() = Some(x.clone());
+                *z.next_op.lock().borrow_mut() = Some(x.clone());
                 q = x;
             }
             collect_cycles();
-            *q.next_op.borrow_mut() = None;
+            *q.next_op.lock().borrow_mut() = None;
         }
         collect_cycles();
         assert_eq!(count.get(), 0);
@@ -1404,5 +1417,14 @@ mod tests {
         drop(gadget_owner);
         drop(gadget);
         collect_cycles();
+    }
+    fn test_thread() { {
+        let f = Cc::new(5);
+        let f2 = f.clone();
+        let h = std::thread::spawn(move || {  {f.clone(); } collect_cycles(); }  );
+        h.join();
+
+    }
+    collect_cycles();
     }
 }

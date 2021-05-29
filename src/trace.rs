@@ -512,6 +512,17 @@ mod impls {
             fn trace(&self, _tracer: &mut Tracer) { }
         }
 
+        impl<T: Trace> Trace for parking_lot::Mutex<T> {
+            fn trace(&self, tracer: &mut Tracer) { 
+                self.lock().trace(tracer)
+            }
+        }
+        impl<T: Trace> Trace for parking_lot::ReentrantMutex<T> {
+            fn trace(&self, tracer: &mut Tracer) { 
+                self.lock().trace(tracer)
+            }
+        }
+
         impl Trace for sync::Once {
             fn trace(&self, _tracer: &mut Tracer) { }
         }
